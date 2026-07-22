@@ -1,0 +1,40 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "ci",
+      "inherits": "base",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON"
+      },
+      "environment": {
+        "VCPKG_ROOT": "$env{VCPKG_INSTALLATION_ROOT}"
+      }
+    },
+    {
+      "name": "windows-latest",
+      "inherits": "ci",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release"
+      }
+    },
+    {
+      "name": "macos-latest",
+      "inherits": "ci",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "arm64-osx-release"
+      }
+    },
+    {
+      "name": "ubuntu-latest",
+      "inherits": "ci",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux-release",
+        "CMAKE_C_COMPILER": "gcc-14",
+        "CMAKE_CXX_COMPILER": "g++-14"
+      }
+    }
+  ]
+}

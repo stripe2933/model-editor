@@ -1,0 +1,48 @@
+{
+  "name": "model-editor",
+  "version": "0.1.0",
+  "dependencies": [
+    "boost-container",
+    "boost-container-hash",
+    "boost-iostreams",
+    "fastgltf",
+    "fmt",
+    "glfw3",
+    "glm",
+    {
+      "name": "imgui",
+      "features": [
+        "docking-experimental",
+        "glfw-binding",
+        {
+          "name": "metal4-binding",
+          "platform": "osx"
+        },
+        {
+          "name": "vulkan-binding",
+          "platform": "!osx"
+        }
+      ]
+    },
+    "meshoptimizer",
+    "tracy",
+    {
+      "name": "vulkan",
+      "platform": "!osx"
+    }
+  ],
+  "features": {
+    "apple-use-vulkan": {
+      "description": "Use Vulkan backend in Apple platform",
+      "dependencies": [
+        {
+          "name": "imgui",
+          "features": [
+            "vulkan-binding"
+          ]
+        },
+        "vulkan"
+      ]
+    }
+  }
+}
