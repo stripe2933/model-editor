@@ -3,6 +3,7 @@
 #include "../pch.hpp"
 
 #include "../utils/macros.hpp"
+#include "../utils/ranges.hpp"
 #include "Gpu.hpp"
 
 namespace vulkan {
@@ -47,28 +48,16 @@ inline vulkan::Swapchain::Swapchain(Gpu &gpu, const vk::SurfaceKHR &surface, vk:
     }() }
     , extent { extent }
     , images { getImages() }
-    , imageViews { [&] {
-        decltype(imageViews) result;
-        result.reserve(images.size());
-        for (vk::Image image : images) {
-            result.emplace_back(gpu.device, vk::ImageViewCreateInfo {
-                {},
-                image,
-                vk::ImageViewType::e2D,
-                vk::Format::eB8G8R8A8Unorm,
-                {},
-                vk::ImageSubresourceRange { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
-            });
-        }
-
-        return result;
-    }() }
-    , imageReadySemaphores { [&] {
-        decltype(imageReadySemaphores) result;
-        result.reserve(images.size());
-        for (auto _ : ranges::views::indices(images.size())) {
-            result.emplace_back(gpu.device, vk::SemaphoreCreateInfo{});
-        }
-
-        return result;
-    }() } { }
+    , imageViews { std::ranges::to<std::vector>(std::views::transform(images, [&](vk::Image image) {
+        return vk::raii::ImageView { gpu.device, vk::ImageViewCreateInfo {
+            {},
+            image,
+            vk::ImageViewType::e2D,
+            vk::Format::eB8G8R8A8Unorm,
+            {},
+            vk::ImageSubresourceRange { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+        } };
+    })) }
+    , imageReadySemaphores { std::ranges::to<std::vector>(ranges::views::generate_n(images.size(), [&] {
+        return vk::raii::Semaphore { gpu.device, vk::SemaphoreCreateInfo{} };
+    })) } { }
