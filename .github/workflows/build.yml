@@ -12,6 +12,7 @@ jobs:
         include:
           - { os: windows-latest, compiler: msvc }
           - { os: windows-latest, compiler: mingw }
+          - { os: windows-latest, compiler: clang-cl }
           - { os: macos-latest, compiler: clang }
           - { os: ubuntu-latest, compiler: gcc }
 
@@ -23,7 +24,7 @@ jobs:
         run: sudo apt install xorg-dev
 
       - uses: ilammy/msvc-dev-cmd@v1
-        if: ${{ matrix.os == 'windows-latest' && matrix.compiler == 'msvc' }}
+        if: ${{ matrix.os == 'windows-latest' && (matrix.compiler == 'msvc' || matrix.compiler == 'clang-cl') }}
 
       - uses: stripe2933/http-cache-server@v0.1.0
         with:

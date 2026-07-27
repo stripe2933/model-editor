@@ -28,6 +28,15 @@
       }
     },
     {
+      "name": "windows-latest-clang-cl",
+      "inherits": "ci",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
       "name": "macos-latest-clang",
       "inherits": "ci",
       "cacheVariables": {
