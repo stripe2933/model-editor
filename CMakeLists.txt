@@ -56,7 +56,11 @@ if (USE_TRACY)
     target_compile_definitions(model-editor PRIVATE TRACY_ENABLE)
 endif()
 
-if (APPLE)
+if (MINGW)
+    # Support wWinMain
+    target_compile_definitions(model-editor PRIVATE UNICODE)
+    target_link_options(model-editor PRIVATE -municode)
+elseif (APPLE)
     set_target_properties(model-editor PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "Model Editor"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"

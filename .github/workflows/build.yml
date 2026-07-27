@@ -9,7 +9,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - { os: windows-latest, compiler: msvc }
+          - { os: windows-latest, compiler: mingw }
+          - { os: macos-latest, compiler: clang }
+          - { os: ubuntu-latest, compiler: gcc }
 
     steps:
       - uses: actions/checkout@v7
@@ -19,6 +23,7 @@ jobs:
         run: sudo apt install xorg-dev
 
       - uses: ilammy/msvc-dev-cmd@v1
+        if: ${{ matrix.os == 'windows-latest' && matrix.compiler == 'msvc' }}
 
       - uses: stripe2933/http-cache-server@v0.1.0
         with:
@@ -29,7 +34,7 @@ jobs:
           VCPKG_BINARY_SOURCES: "clear;http,http://localhost:12321/{name}-{version}-{sha},readwrite"
         run: |
           mv .github/workflows/scripts/* .
-          cmake --preset=${{ matrix.os }}
+          cmake --preset=${{ matrix.os }}-${{ matrix.compiler }}
 
       - name: Build
         run: cmake --build build --config Release
@@ -37,7 +42,7 @@ jobs:
       - name: Upload binary executables
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ runner.os }}-${{ runner.arch }}
+          name: ${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
           path: |
             build/model-editor.exe
             build/model-editor.app

@@ -14,21 +14,28 @@
       }
     },
     {
-      "name": "windows-latest",
+      "name": "windows-latest-msvc",
       "inherits": "ci",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows-release"
       }
     },
     {
-      "name": "macos-latest",
+      "name": "windows-latest-mingw",
+      "inherits": "ci",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-mingw-dynamic-release"
+      }
+    },
+    {
+      "name": "macos-latest-clang",
       "inherits": "ci",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "arm64-osx-release"
       }
     },
     {
-      "name": "ubuntu-latest",
+      "name": "ubuntu-latest-gcc",
       "inherits": "ci",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-linux-release",
