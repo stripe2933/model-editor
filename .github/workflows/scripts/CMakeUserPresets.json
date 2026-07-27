@@ -37,14 +37,22 @@
       }
     },
     {
-      "name": "macos-latest-clang",
+      "name": "macos-latest-metal",
       "inherits": "ci",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "arm64-osx-release"
       }
     },
     {
-      "name": "ubuntu-latest-gcc",
+      "name": "macos-latest-vulkan",
+      "inherits": "ci",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "arm64-osx-release",
+        "APPLE_USE_VULKAN": "ON"
+      }
+    },
+    {
+      "name": "ubuntu-latest-default",
       "inherits": "ci",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-linux-release",

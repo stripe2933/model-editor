@@ -10,11 +10,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, compiler: msvc }
-          - { os: windows-latest, compiler: mingw }
-          - { os: windows-latest, compiler: clang-cl }
-          - { os: macos-latest, compiler: clang }
-          - { os: ubuntu-latest, compiler: gcc }
+          - { os: windows-latest, variant: msvc     }
+          - { os: windows-latest, variant: mingw    }
+          - { os: windows-latest, variant: clang-cl }
+          - { os: macos-latest,   variant: metal    }
+          - { os: macos-latest,   variant: vulkan   }
+          - { os: ubuntu-latest,  variant: default  }
 
     steps:
       - uses: actions/checkout@v7
@@ -24,7 +25,7 @@ jobs:
         run: sudo apt install xorg-dev
 
       - uses: ilammy/msvc-dev-cmd@v1
-        if: ${{ matrix.os == 'windows-latest' && (matrix.compiler == 'msvc' || matrix.compiler == 'clang-cl') }}
+        if: ${{ matrix.os == 'windows-latest' && (matrix.variant == 'msvc' || matrix.variant == 'clang-cl') }}
 
       - uses: stripe2933/http-cache-server@v0.1.0
         with:
@@ -35,7 +36,7 @@ jobs:
           VCPKG_BINARY_SOURCES: "clear;http,http://localhost:12321/{name}-{version}-{sha},readwrite"
         run: |
           mv .github/workflows/scripts/* .
-          cmake --preset=${{ matrix.os }}-${{ matrix.compiler }}
+          cmake --preset=${{ matrix.os }}-${{ matrix.variant }}
 
       - name: Build
         run: cmake --build build --config Release
@@ -43,7 +44,7 @@ jobs:
       - name: Upload binary executables
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.os }}-${{ matrix.compiler }}-${{ github.sha }}
+          name: ${{ matrix.os }}-${{ matrix.variant }}-${{ github.sha }}
           path: |
             build/model-editor.exe
             build/model-editor.app
