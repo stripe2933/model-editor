@@ -6,6 +6,7 @@
 #include <exception>
 #include <functional>
 #include <initializer_list>
+#include <list>
 #include <numeric>
 #include <ranges>
 #include <memory>
@@ -21,6 +22,7 @@
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
 #include <boost/container_hash/hash.hpp>
+#include <boost/iostreams/device/mapped_file.hpp>
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>

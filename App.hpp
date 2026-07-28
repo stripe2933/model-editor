@@ -6,6 +6,9 @@ class App {
 public:
     explicit App();
 
+    void loadAsset(std::filesystem::path path);
+    void openAssetWithDialog();
+
     void run();
 
 private:

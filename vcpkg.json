@@ -5,6 +5,8 @@
     "boost-container",
     "boost-container-hash",
     "boost-iostreams",
+    "bshoshany-thread-pool",
+    "cstring-view",
     "fastgltf",
     "fmt",
     "glfw3",
@@ -25,6 +27,7 @@
       ]
     },
     "meshoptimizer",
+    "nativefiledialog-extended",
     "tracy",
     {
       "name": "vulkan",

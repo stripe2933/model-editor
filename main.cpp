@@ -14,10 +14,13 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 #endif
 
 #ifdef _WIN32
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    int argc;
+    const LPWSTR* const argv = CommandLineToArgvW(pCmdLine, &argc);
 #else
 int main(int argc, const char *argv[]) {
 #endif
@@ -31,7 +34,14 @@ int main(int argc, const char *argv[]) {
     }
 
     try {
-        App{}.run();
+        App app;
+
+        // Load assets specified in the command line.
+        for (int i = 1; i < argc; ++i) {
+            app.loadAsset(argv[i]);
+        }
+
+        app.run();
     }
     catch (const std::exception &e) {
         fmt::println(std::cerr, "{}", e.what());

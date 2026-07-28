@@ -1,17 +1,37 @@
 #include "App.hpp"
 
+#include <BS_thread_pool.hpp>
+
+#if defined(_WIN32)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#elif defined(__APPLE__)
+#define GLFW_EXPOSE_NATIVE_COCOA
+#else
+#define GLFW_EXPOSE_NATIVE_WAYLAND
+#endif
 #if !defined(__APPLE__) || defined(APPLE_USE_VULKAN)
 #define GLFW_INCLUDE_VULKAN
 #else
 #define GLFW_INCLUDE_NONE
 #endif
-#include <GLFW/glfw3.h>
+#define NFD_NATIVE
+#include <nfd_glfw3.h> // Will transitively include <GLFW/glfw3.h>
+#include <nfd.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 
+#include "gltf/AssetWithDataBuffer.hpp"
+#include "utils/algorithm.hpp"
+#include "utils/imgui.hpp"
 #include "utils/macros.hpp"
 #include "utils/ranges.hpp"
+#include "utils/TempStringBuffer.hpp"
+
+#ifdef _WIN32
+#include <tchar.h>
+#endif
 
 #if defined(__APPLE__) && !defined(APPLE_USE_VULKAN)
 #define IMGUI_IMPL_METAL_CPP
@@ -28,7 +48,19 @@
 #include "vulkan/Swapchain.hpp"
 #endif
 
+namespace {
+    NFD::Guard guard;
+
+    struct Viewport {
+        gltf::AssetWithDataBuffer assetWithDataBuffer;
+
+        ImGuiWindow *window;
+    };
+}
+
 struct App::PImpl {
+    BS::thread_pool<> threadPool;
+
     std::unique_ptr<GLFWwindow, decltype([](GLFWwindow *window) noexcept { glfwDestroyWindow(window); })> window;
 
 #if defined(__APPLE__) && !defined(APPLE_USE_VULKAN)
@@ -59,6 +91,14 @@ struct App::PImpl {
 
     boost::container::static_vector<vulkan::Frame, 2> frames;
 #endif
+
+    std::vector<std::shared_ptr<Viewport>> viewports;
+    std::weak_ptr<Viewport> focusedViewport;
+
+    struct {
+        std::future<gltf::AssetWithDataBuffer> future;
+        bool isLoadingPopupOpened;
+    } backgroundAssetLoadingContext;
 
     explicit PImpl()
         : window { [] {
@@ -176,6 +216,28 @@ App::App()
         self.pImpl->swapchain = vulkan::Swapchain { self.pImpl->gpu, *self.pImpl->surface, extent, const_cast<vk::SwapchainKHR&&>(*std::move(self.pImpl->swapchain)) };
 #endif
     });
+    glfwSetDropCallback(pImpl->window.get(), [](GLFWwindow *window, int count, const char **paths) {
+        auto &self = *static_cast<App*>(glfwGetWindowUserPointer(window));
+
+        assert(count > 0);
+        std::filesystem::path path { reinterpret_cast<const char8_t*>(paths[0]) };
+
+        static const std::filesystem::path gltfExtensions[] = { ".gltf", ".glb" };
+
+        if (is_directory(path)) {
+            // If the directory contains glTF file, load it.
+            for (const auto &entry : std::filesystem::directory_iterator { path }) {
+                const std::filesystem::path &childPath = entry.path();
+                if (ranges::any_of(childPath.extension(), gltfExtensions)) {
+                    self.loadAsset(childPath);
+                    return;
+                }
+            }
+        }
+        else if (ranges::any_of(path.extension(), gltfExtensions)) {
+            self.loadAsset(std::move(path));
+        }
+    });
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -219,6 +281,41 @@ App::App()
 #endif
 }
 
+void App::loadAsset(std::filesystem::path path) {
+    const auto it = std::ranges::find_if(pImpl->viewports, [&path](const auto &viewport) noexcept {
+        return viewport->assetWithDataBuffer.path == path;
+    });
+    if (it != pImpl->viewports.end()) {
+        // Same asset already loaded. Focus the viewport window associated to that.
+        assert((*it)->window);
+        ImGui::FocusWindow((*it)->window);
+    }
+    else if (auto &context = pImpl->backgroundAssetLoadingContext; !context.future.valid() /* Allow the request only if no other asset is loading */) {
+        context = {
+            .future = pImpl->threadPool.submit_task([MOVE_CAP(path)] mutable {
+                ZoneScopedN("Load glTF Asset");
+                return gltf::AssetWithDataBuffer { std::move(path) };
+            }),
+            .isLoadingPopupOpened = false,
+        };
+    }
+}
+
+void App::openAssetWithDialog() {
+    constexpr std::array filters {
+        nfdfilteritem_t { TEXT("glTF 2.0 Asset"), TEXT("gltf,glb") },
+    };
+
+    NFD::UniquePathN path;
+
+    nfdwindowhandle_t windowHandle{};
+    NFD_GetNativeWindowFromGLFWWindow(pImpl->window.get(), &windowHandle);
+
+    if (NFD::OpenDialog(path, filters.data(), filters.size(), nullptr, windowHandle) == NFD_OKAY) {
+        loadAsset(path.get());
+    }
+}
+
 void App::run() {
     std::uint64_t frameIndex = 0;
     for (; !glfwWindowShouldClose(pImpl->window.get()); ++frameIndex) {
@@ -244,6 +341,16 @@ void App::run() {
         auto &frame = pImpl->frames[framesInFlightIndex];
 
         {
+            ZoneScopedN("Process background tasks");
+
+            if (auto &future = pImpl->backgroundAssetLoadingContext.future; future.valid()) {
+                if (future.wait_for(std::chrono::seconds{}) == std::future_status::ready) {
+                    pImpl->viewports.push_back(std::make_shared<Viewport>(future.get(), nullptr));
+                }
+            }
+        }
+
+        {
             ZoneScopedN("Process GLFW events");
             glfwPollEvents();
         }
@@ -259,9 +366,89 @@ void App::run() {
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            ImGui::DockSpaceOverViewport();
+            const ImGuiID dockSpaceId = ImGui::DockSpaceOverViewport();
 
-            ImGui::ShowDemoWindow();
+            // ----- Menu bar -----
+
+            if (ImGui::BeginMainMenuBar()) {
+                if (ImGui::BeginMenu("File")) {
+                    ImGui::SetNextItemShortcut(ImGuiMod_Ctrl | ImGuiKey_O);
+                    if (ImGui::MenuItem("Open...", "Ctrl+O" /* TODO: use ⌘ in macOS */)) {
+                        openAssetWithDialog();
+                    }
+
+                    ImGui::Separator();
+
+                    ImGui::SetNextItemShortcut(ImGuiMod_Ctrl | ImGuiKey_W);
+                    if (ImGui::MenuItem("Close Asset", "Ctrl+W" /* TODO: use ⌘ in macOS */, false, !pImpl->focusedViewport.expired())) {
+                        if (const auto &viewport = pImpl->focusedViewport.lock()) {
+                            pImpl->viewports.erase(std::ranges::find(pImpl->viewports, viewport));
+                            pImpl->focusedViewport.reset();
+                        }
+                    }
+
+                    ImGui::EndMenu();
+                }
+
+                ImGui::EndMainMenuBar();
+            }
+
+            // ----- Global shortcut processing -----
+
+            if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O, ImGuiInputFlags_RouteGlobal)) {
+                openAssetWithDialog();
+            }
+
+            if (auto &context = pImpl->backgroundAssetLoadingContext; context.future.valid()) {
+                if (!context.isLoadingPopupOpened) {
+                    ImGui::OpenPopup("asset-loading-indicator-popup");
+                    context.isLoadingPopupOpened = true;
+                }
+
+                if (ImGui::BeginPopupModal("asset-loading-indicator-popup", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs)) {
+                    imgui::widget::Spinner("##asset-loading-indicator", 24.f, 4.f, ImGui::GetColorU32(ImGuiCol_ButtonActive));
+                    ImGui::EndPopup();
+                }
+            }
+
+            // ----- Viewport windows -----
+
+            const ImGuiID centralDockSpaceId = ImGui::DockBuilderGetCentralNode(dockSpaceId)->ID;
+            for (auto it = pImpl->viewports.begin(); it != pImpl->viewports.end(); ) {
+                auto &viewport = *it;
+                bool windowOpened = true;
+
+                // When the viewport window is created at the first time, dock it to the central dock space.
+                ImGui::SetNextWindowDockID(centralDockSpaceId, ImGuiCond_Appearing);
+
+                // Different assets may have the same basename, so &viewport is used for the persistent window ID.
+                if (ImGui::Begin(tempStringBuffer.write("{}###{}", viewport->assetWithDataBuffer.path.filename(), fmt::ptr(&viewport)).view().c_str(), &windowOpened, ImGuiWindowFlags_NoSavedSettings) && windowOpened) {
+                    if (!viewport->window) {
+                        viewport->window = ImGui::GetCurrentWindow();
+                    }
+
+                    if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_W, ImGuiInputFlags_RouteFocused)) {
+                        windowOpened = false;
+                    }
+                    else {
+                        if (ImGui::IsWindowFocused()) {
+                            pImpl->focusedViewport = viewport;
+                        }
+                    }
+                }
+                ImGui::End();
+
+                if (windowOpened) {
+                    ++it;
+                }
+                else {
+                    if (viewport == pImpl->focusedViewport.lock()) {
+                        pImpl->focusedViewport.reset();
+                    }
+
+                    it = pImpl->viewports.erase(it);
+                }
+            }
 
             ImGui::Render();
         }

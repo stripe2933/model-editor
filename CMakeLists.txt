@@ -16,24 +16,35 @@ option(USE_TRACY "Use Tracy for frame profiling")
 find_package(boost_container CONFIG REQUIRED)
 find_package(boost_container_hash CONFIG REQUIRED)
 find_package(boost_iostreams CONFIG REQUIRED)
+find_package(cstring_view CONFIG REQUIRED)
+find_path(BSHOSHANY_THREAD_POOL_INCLUDE_DIRS "BS_thread_pool.hpp")
 find_package(fastgltf CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
+find_package(nfd CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 
 add_executable(model-editor WIN32 MACOSX_BUNDLE
     App.cpp
     App.hpp
+    gltf/AssetExternalBuffers.cpp
+    gltf/AssetExternalBuffers.hpp
+    gltf/AssetWithDataBuffer.cpp
+    gltf/AssetWithDataBuffer.hpp
     main.cpp
     impl.cpp
+    utils/algorithm.hpp
+    utils/imgui.hpp
     utils/macros.hpp
     utils/ranges.hpp
+    utils/TempStringBuffer.hpp
 )
 target_compile_features(model-editor PRIVATE cxx_std_23)
 target_include_directories(model-editor PRIVATE
+    ${BSHOSHANY_THREAD_POOL_INCLUDE_DIRS}
     thirdparty/include
 )
 target_precompile_headers(model-editor PRIVATE pch.hpp)
@@ -41,12 +52,14 @@ target_link_libraries(model-editor PRIVATE
     Boost::container
     Boost::container_hash
     Boost::iostreams
+    cpp_util::cstring_view
     fastgltf::fastgltf
     fmt::fmt
     glfw
     glm::glm
     imgui::imgui
     meshoptimizer::meshoptimizer
+    nfd::nfd
     Tracy::TracyClient
 )
 
@@ -56,10 +69,13 @@ if (USE_TRACY)
     target_compile_definitions(model-editor PRIVATE TRACY_ENABLE)
 endif()
 
-if (MINGW)
-    # Support wWinMain
-    target_compile_definitions(model-editor PRIVATE UNICODE)
-    target_link_options(model-editor PRIVATE -municode)
+if (WIN32)
+    target_compile_definitions(model-editor PRIVATE UNICODE _UNICODE)
+
+    if (MINGW)
+        # Support wWinMain
+        target_link_options(model-editor PRIVATE -municode)
+    endif()
 elseif (APPLE)
     set_target_properties(model-editor PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "Model Editor"
@@ -70,6 +86,11 @@ elseif (APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.leekyoungheon.modeleditor"
     )
+elseif (LINUX)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(WAYLAND_CLIENT REQUIRED wayland-client)
+
+    target_include_directories(model-editor PRIVATE ${WAYLAND_CLIENT_INCLUDE_DIRS})
 endif()
 
 if (APPLE AND NOT APPLE_USE_VULKAN)

@@ -16,6 +16,10 @@
 #define LIFETIMEBOUND
 #endif
 
+#if !__has_include(<tchar.h>)
+#define TEXT(StringLiteral) "" StringLiteral
+#endif
+
 #if defined(__APPLE__) && !defined(APPLE_USE_VULKAN)
 #define DECLARE_AUTORELEASEPOOL auto CONCAT(_autoreleasepool_, __COUNTER__) = TransferPtr(NS::AutoreleasePool::alloc()->init())
 #endif
