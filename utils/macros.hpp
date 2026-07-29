@@ -4,6 +4,7 @@
 #define MOVE_CAP(x) x = std::move(x)
 #define INDEX_SEQ(Is, N, ...) [&]<auto ...Is>(std::index_sequence<Is...>) __VA_ARGS__ (std::make_index_sequence<N>{})
 #define ARRAY_OF(N, ...) INDEX_SEQ(Is, N, { return std::array { ((void)Is, __VA_ARGS__)... }; })
+#define LIFT(...) [](auto &&...args) noexcept(noexcept(__VA_ARGS__(FWD(args)...))) -> decltype(auto) { return __VA_ARGS__(FWD(args)...); }
 
 #define CONCAT_INNER(a, b) a##b
 #define CONCAT(a, b) CONCAT_INNER(a, b)

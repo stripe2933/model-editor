@@ -4,6 +4,10 @@
 
 #if defined(_WIN32)
 #define GLFW_EXPOSE_NATIVE_WIN32
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #elif defined(__APPLE__)
 #define GLFW_EXPOSE_NATIVE_COCOA
 #else
@@ -18,16 +22,19 @@
 #include <nfd_glfw3.h> // Will transitively include <GLFW/glfw3.h>
 #include <nfd.hpp>
 
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 
 #include "gltf/AssetWithDataBuffer.hpp"
 #include "utils/algorithm.hpp"
+#include "utils/functional.hpp"
 #include "utils/imgui.hpp"
 #include "utils/macros.hpp"
 #include "utils/ranges.hpp"
 #include "utils/TempStringBuffer.hpp"
+#include "utils/utf8.hpp"
 
 #ifdef _WIN32
 #include <tchar.h>
@@ -55,6 +62,61 @@ namespace {
         gltf::AssetWithDataBuffer assetWithDataBuffer;
 
         ImGuiWindow *window;
+    };
+
+    struct GuiState {
+        struct SettingsHandler final : ImGuiSettingsHandler {
+            explicit SettingsHandler() {
+                enum class Section : std::intptr_t {
+                    RecentAssets = 1, // Starts from 1 to prevent void* conversion being nullptr
+                };
+
+                TypeName = "UserData";
+                TypeHash = ImHashStr("UserData");
+                ReadOpenFn = [](ImGuiContext*, ImGuiSettingsHandler*, const char *name) -> void* {
+                    if (std::strcmp(name, "RecentAssets") == 0) {
+                        return reinterpret_cast<void*>(std::to_underlying(Section::RecentAssets));
+                    }
+
+                    return nullptr;
+                };
+                ReadLineFn = [](ImGuiContext*, ImGuiSettingsHandler *handler, void *entry, const char *line) {
+                    auto &userData = *static_cast<GuiState*>(handler->UserData);
+
+                    switch (static_cast<Section>(reinterpret_cast<std::underlying_type_t<Section>>(entry))) {
+                        case Section::RecentAssets:
+                            if (line[0] != '\0') {
+                                userData.recentAssets.emplace_back(line, false);
+                            }
+                            break;
+                        default:
+                            break;
+                    }
+                };
+                WriteAllFn = [](ImGuiContext*, ImGuiSettingsHandler *handler, ImGuiTextBuffer *outBuf) {
+                    auto &userData = *static_cast<const GuiState*>(handler->UserData);
+
+                    const auto appendToOutBuf = [outBuf](std::string_view text) {
+                        outBuf->append(text.data(), text.data() + text.size());
+                    };
+
+                    if (!userData.recentAssets.empty()) {
+                        appendToOutBuf("[UserData][RecentAssets]\n");
+                        for (std::string_view path : std::views::keys(userData.recentAssets)) {
+                            appendToOutBuf(path);
+                            appendToOutBuf("\n");
+                        }
+                        appendToOutBuf("\n");
+                    }
+                };
+            }
+        };
+
+        std::vector<std::pair<std::string, bool /* loaded */>> recentAssets;
+
+        std::string recentAssetSearchText;
+        std::vector<std::pair<std::size_t /* index in recentAssets */, boost::container::small_vector<std::size_t, 4> /* occurrence offsets */>> recentAssetSearchResult;
+        bool recentAssetSearchResultInvalidated; // should be set to true when either recentAssets or recentAssetSearchText changed
     };
 }
 
@@ -94,6 +156,9 @@ struct App::PImpl {
 
     std::vector<std::shared_ptr<Viewport>> viewports;
     std::weak_ptr<Viewport> focusedViewport;
+
+    GuiState guiState;
+    GuiState::SettingsHandler guiStateSettingsHandler;
 
     struct {
         std::future<gltf::AssetWithDataBuffer> future;
@@ -181,7 +246,9 @@ struct App::PImpl {
             return result;
         }() }
     #endif
-    {
+        , guiState {
+            .recentAssetSearchResultInvalidated = false,
+        } {
 #if defined(__APPLE__) && !defined(APPLE_USE_VULKAN)
         glfwSetWindowMetalLayer(window.get(), layer);
 
@@ -220,7 +287,7 @@ App::App()
         auto &self = *static_cast<App*>(glfwGetWindowUserPointer(window));
 
         assert(count > 0);
-        std::filesystem::path path { reinterpret_cast<const char8_t*>(paths[0]) };
+        std::filesystem::path path = utils::toPath(ranges::views::cast<char8_t>(std::string_view { paths[0] }));
 
         static const std::filesystem::path gltfExtensions[] = { ".gltf", ".glb" };
 
@@ -247,6 +314,11 @@ App::App()
 #if defined(__APPLE__)
     io.IniFilename = "../../../imgui.ini"; // TODO: use Application Support folder
 #endif
+    io.Fonts->AddFontFromFileTTF("/System/Library/Fonts/AppleSDGothicNeo.ttc", 16.f);
+    io.Fonts->AddFontFromFileTTF("/System/Library/Fonts/Apple Color Emoji.ttc", 16.f);
+
+    pImpl->guiStateSettingsHandler.UserData = &pImpl->guiState;
+    ImGui::AddSettingsHandler(&pImpl->guiStateSettingsHandler);
 
 #if defined(__APPLE__) && !defined(APPLE_USE_VULKAN)
     ImGui_ImplGlfw_InitForOther(pImpl->window.get(), true);
@@ -289,6 +361,22 @@ void App::loadAsset(std::filesystem::path path) {
         // Same asset already loaded. Focus the viewport window associated to that.
         assert((*it)->window);
         ImGui::FocusWindow((*it)->window);
+
+        // Update recentAssets
+        std::string pathString = utils::toUTF8NFCString(path);
+        const auto recentAssetIt = std::ranges::find(pImpl->guiState.recentAssets, pathString, LIFT(get<0>));
+        if (recentAssetIt == pImpl->guiState.recentAssets.end()) {
+            pImpl->guiState.recentAssets.emplace_back(std::move(pathString), true);
+        }
+        else {
+            // Mark the asset as loaded
+            recentAssetIt->second = true;
+
+            // Move it to the end
+            std::rotate(recentAssetIt, std::next(recentAssetIt, 1), pImpl->guiState.recentAssets.end());
+        }
+
+        pImpl->guiState.recentAssetSearchResultInvalidated = true;
     }
     else if (auto &context = pImpl->backgroundAssetLoadingContext; !context.future.valid() /* Allow the request only if no other asset is loading */) {
         context = {
@@ -345,7 +433,23 @@ void App::run() {
 
             if (auto &future = pImpl->backgroundAssetLoadingContext.future; future.valid()) {
                 if (future.wait_for(std::chrono::seconds{}) == std::future_status::ready) {
-                    pImpl->viewports.push_back(std::make_shared<Viewport>(future.get(), nullptr));
+                    const auto &viewport = pImpl->viewports.emplace_back(std::make_shared<Viewport>(future.get(), nullptr));
+
+                    // Update recentAssets
+                    std::string pathString = utils::toUTF8NFCString(viewport->assetWithDataBuffer.path);
+                    const auto it = std::ranges::find(pImpl->guiState.recentAssets, pathString, LIFT(get<0>));
+                    if (it == pImpl->guiState.recentAssets.end()) {
+                        pImpl->guiState.recentAssets.emplace_back(std::move(pathString), true);
+                    }
+                    else {
+                        // Mark the asset as loaded
+                        it->second = true;
+
+                        // Move it to the end
+                        std::rotate(it, std::next(it, 1), pImpl->guiState.recentAssets.end());
+                    }
+
+                    pImpl->guiState.recentAssetSearchResultInvalidated = true;
                 }
             }
         }
@@ -375,6 +479,196 @@ void App::run() {
                     ImGui::SetNextItemShortcut(ImGuiMod_Ctrl | ImGuiKey_O);
                     if (ImGui::MenuItem("Open...", "Ctrl+O" /* TODO: use ⌘ in macOS */)) {
                         openAssetWithDialog();
+                    }
+
+                    if (ImGui::BeginMenu("Recent Asset")) {
+                        if (pImpl->guiState.recentAssets.empty()) {
+                            ImGui::TextDisabled("No recent assets");
+                        }
+                        else {
+                            const std::size_t searchTextSizeBefore = pImpl->guiState.recentAssetSearchText.size();
+                            bool insertedAtBeginOrEnd = false;
+                            auto userData = std::tie(searchTextSizeBefore, insertedAtBeginOrEnd);
+
+                            const bool searchTextChanged = imgui::widget::InputTextWithHint(
+                                "##recent-asset-search-text",
+                                "Search...",
+                                &pImpl->guiState.recentAssetSearchText,
+                                ImGuiInputTextFlags_CallbackEdit,
+                                [](ImGuiInputTextCallbackData *data) {
+                                    const auto &[searchTextSizeBefore, insertedAtBeginOrEnd] = *static_cast<decltype(userData)*>(data->UserData);
+                                    insertedAtBeginOrEnd = data->BufTextLen > searchTextSizeBefore // Text is inserted
+                                        && (data->CursorPos == data->BufTextLen // at the end of the text, or
+                                            || searchTextSizeBefore + data->CursorPos == data->BufTextLen); // at the beginning of the text.
+                                    return 0;
+                                }, &userData);
+
+                            if (pImpl->guiState.recentAssetSearchResultInvalidated || searchTextChanged) {
+                                if (pImpl->guiState.recentAssetSearchText.empty()) {
+                                    pImpl->guiState.recentAssetSearchResult.clear();
+                                }
+                                else {
+                                    namespace sz = ashvardanian::stringzilla;
+                                    const sz::utf8_uncased_needle<> needle { pImpl->guiState.recentAssetSearchText };
+
+                                    // If the newly entered search text is an extension of the previous search text (i.e.
+                                    // the user is typing more characters to narrow down the search), we can update the
+                                    // occurrence offsets in-place.
+                                    // Otherwise, we need to recalculate the occurrence offsets for all recent asset paths.
+                                    if (!pImpl->guiState.recentAssetSearchResultInvalidated && (searchTextSizeBefore != 0 && insertedAtBeginOrEnd)) {
+                                        // Update the occurrence offsets.
+                                        for (auto &[i, offsets] : pImpl->guiState.recentAssetSearchResult) {
+                                            offsets.clear();
+                                            utils::getCaseInsensitiveOccurrenceOffsets(sz::string_view { pImpl->guiState.recentAssets[i].first }, needle, std::back_inserter(offsets));
+                                        }
+
+                                        // Remove paths that no longer match the search text.
+                                        std::erase_if(pImpl->guiState.recentAssetSearchResult, utils::decomposer([](std::size_t, const auto &occurrenceOffsets) noexcept {
+                                            return occurrenceOffsets.empty();
+                                        }));
+                                    }
+                                    else {
+                                        // Copy paths that match the search text, along with the occurrence offset, to the
+                                        // filtered path vector.
+                                        pImpl->guiState.recentAssetSearchResult.clear();
+                                        for (auto [i, path] : ranges::views::enumerate(std::views::keys(pImpl->guiState.recentAssets))) {
+                                            boost::container::small_vector<std::size_t, 4> offsets;
+                                            utils::getCaseInsensitiveOccurrenceOffsets(sz::string_view { path }, needle, std::back_inserter(offsets));
+                                            if (!offsets.empty()) {
+                                                pImpl->guiState.recentAssetSearchResult.emplace_back(i, std::move(offsets));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                pImpl->guiState.recentAssetSearchResultInvalidated = false;
+                            }
+
+                            ImGui::Separator();
+
+                            if (pImpl->guiState.recentAssetSearchText.empty()) {
+                                for (auto it = pImpl->guiState.recentAssets.rbegin(); it != pImpl->guiState.recentAssets.rend();) {
+                                    const std::size_t i = std::distance(pImpl->guiState.recentAssets.begin(), it.base());
+                                    const auto &[pathStr, loaded] = *it;
+
+                                    if (DECLARE_IMGUI_SCOPE(ItemFlag, ImGuiItemFlags_AutoClosePopups, false); ImGui::MenuItem(pathStr.c_str(), nullptr, loaded)) {
+                                        std::filesystem::path path = utils::toPath(ranges::views::cast<char8_t>(pathStr));
+                                        if (exists(path)) {
+                                            loadAsset(std::move(path));
+                                            ImGui::CloseCurrentPopup();
+                                        }
+                                        else {
+                                            ImGui::OpenPopup(tempStringBuffer.write("File not exists##{}", i).view().c_str());
+                                        }
+                                    }
+
+                                    bool erase = false;
+                                    if (ImGui::BeginPopup(tempStringBuffer.write("File not exists##{}", i).view().c_str())) {
+                                        imgui::widget::TextUnformatted("The file does not exist. Would you remove the file from the recents?");
+
+                                        ImGui::Separator();
+
+                                        if (ImGui::Button("Yes")) {
+                                            erase = true;
+                                            ImGui::CloseCurrentPopup();
+                                        }
+                                        ImGui::SetItemDefaultFocus();
+
+                                        ImGui::SameLine();
+
+                                        if (ImGui::Button("No")) {
+                                            ImGui::CloseCurrentPopup();
+                                        }
+
+                                        ImGui::EndPopup();
+                                    }
+                                    else if (ImGui::BeginPopupContextItem()) {
+                                        if (ImGui::MenuItem("Remove from Recents")) {
+                                            erase = true;
+                                        }
+
+                                        ImGui::EndPopup();
+                                    }
+
+                                    if (erase) {
+                                        it = static_cast<decltype(it)>(pImpl->guiState.recentAssets.erase(std::next(it, 1).base()));
+                                    }
+                                    else {
+                                        ++it;
+                                    }
+                                }
+                            }
+                            else {
+                                for (auto it = pImpl->guiState.recentAssetSearchResult.rbegin(); it != pImpl->guiState.recentAssetSearchResult.rend();) {
+                                    const auto &[i, occurrenceOffsets] = *it;
+                                    const auto &[pathStr, loaded] = pImpl->guiState.recentAssets[i];
+                                
+                                    const ImVec2 highlightPos = ImGui::GetCursorScreenPos();
+                                    for (std::size_t offset : occurrenceOffsets) {
+                                        const float textWidthFromBeginToStartOfOccurrence = ImGui::CalcTextSize(pathStr.data(), &pathStr[offset]).x;
+                                        const ImVec2 textSizeFromBeginToEndOfOccurrence = ImGui::CalcTextSize(pathStr.data(), &pathStr[offset] + pImpl->guiState.recentAssetSearchText.size());
+                                        ImGui::GetWindowDrawList()->AddRectFilled(
+                                            highlightPos + ImVec2 { textWidthFromBeginToStartOfOccurrence, 0.f },
+                                            highlightPos + textSizeFromBeginToEndOfOccurrence,
+                                            0xFF00AABB);
+                                    }
+                                
+                                    if (DECLARE_IMGUI_SCOPE(ItemFlag, ImGuiItemFlags_AutoClosePopups, false); ImGui::MenuItem(pathStr.c_str(), nullptr, loaded)) {
+                                        std::filesystem::path path = utils::toPath(ranges::views::cast<char8_t>(pathStr));
+                                        if (exists(path)) {
+                                            loadAsset(std::move(path));
+                                
+                                            pImpl->guiState.recentAssetSearchText.clear();
+                                            pImpl->guiState.recentAssetSearchResultInvalidated = true;
+                                
+                                            ImGui::CloseCurrentPopup();
+                                        }
+                                        else {
+                                            ImGui::OpenPopup(tempStringBuffer.write("File not exists##{}", i).view().c_str());
+                                        }
+                                    }
+
+                                    bool erase = false;
+                                    if (ImGui::BeginPopup(tempStringBuffer.write("File not exists##{}", i).view().c_str())) {
+                                        imgui::widget::TextUnformatted("The file does not exist. Would you remove the file from the recents?");
+
+                                        ImGui::Separator();
+
+                                        if (ImGui::Button("Yes")) {
+                                            erase = true;
+                                            ImGui::CloseCurrentPopup();
+                                        }
+                                        ImGui::SetItemDefaultFocus();
+
+                                        ImGui::SameLine();
+                                        if (ImGui::Button("No")) {
+                                            ImGui::CloseCurrentPopup();
+                                        }
+
+                                        ImGui::EndPopup();
+                                    }
+                                    else if (ImGui::BeginPopupContextItem()) {
+                                        if (ImGui::MenuItem("Remove from Recents")) {
+                                            erase = true;
+                                        }
+
+                                        ImGui::EndPopup();
+                                    }
+
+                                    if (erase) {
+                                        pImpl->guiState.recentAssets.erase(std::next(pImpl->guiState.recentAssets.begin(), it->first));
+                                        pImpl->guiState.recentAssetSearchResultInvalidated = true;
+
+                                        it = static_cast<decltype(it)>(pImpl->guiState.recentAssetSearchResult.erase(std::next(it, 1).base()));
+                                    }
+                                    else {
+                                        ++it;
+                                    }
+                                }
+                            }
+                        }
+
+                        ImGui::EndMenu();
                     }
 
                     ImGui::Separator();
@@ -422,7 +716,7 @@ void App::run() {
                 ImGui::SetNextWindowDockID(centralDockSpaceId, ImGuiCond_Appearing);
 
                 // Different assets may have the same basename, so &viewport is used for the persistent window ID.
-                if (ImGui::Begin(tempStringBuffer.write("{}###{}", viewport->assetWithDataBuffer.path.filename(), fmt::ptr(&viewport)).view().c_str(), &windowOpened, ImGuiWindowFlags_NoSavedSettings) && windowOpened) {
+                if (ImGui::Begin(tempStringBuffer.write("{}###{}", utils::toUTF8NFCString(viewport->assetWithDataBuffer.path.filename()), fmt::ptr(&viewport)).view().c_str(), &windowOpened, ImGuiWindowFlags_NoSavedSettings) && windowOpened) {
                     if (!viewport->window) {
                         viewport->window = ImGui::GetCurrentWindow();
                     }
@@ -444,6 +738,12 @@ void App::run() {
                 else {
                     if (viewport == pImpl->focusedViewport.lock()) {
                         pImpl->focusedViewport.reset();
+                    }
+
+                    // Mark asset is unloaded in recentAssets
+                    const auto recentAssetIt = std::ranges::find(pImpl->guiState.recentAssets, utils::toUTF8NFCString((*it)->assetWithDataBuffer.path), LIFT(get<0>));
+                    if (recentAssetIt != pImpl->guiState.recentAssets.end()) {
+                        recentAssetIt->second = false;
                     }
 
                     it = pImpl->viewports.erase(it);

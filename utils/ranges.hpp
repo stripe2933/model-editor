@@ -26,4 +26,9 @@ namespace ranges::views {
     [[nodiscard]] constexpr auto generate_n(std::size_t n, G &&gen LIFETIMEBOUND) noexcept {
         return std::views::transform(indices(n), [&gen](std::size_t) noexcept(std::is_nothrow_invocable_v<G>) -> decltype(auto) { return std::invoke(gen); });
     }
+
+    template <typename T>
+    [[nodiscard]] constexpr auto cast(std::ranges::input_range auto &&r) noexcept {
+        return std::views::transform(FWD(r), [](auto &&x) noexcept(noexcept(static_cast<T>(FWD(x)))) -> decltype(auto) { return static_cast<T>(FWD(x)); });
+    }
 }

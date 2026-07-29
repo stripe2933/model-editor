@@ -25,6 +25,7 @@ find_package(glm CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 find_package(nfd CONFIG REQUIRED)
+find_path(STRINGZILLA_INCLUDE_DIRS "stringzilla/compare.h")
 find_package(Tracy CONFIG REQUIRED)
 
 add_executable(model-editor WIN32 MACOSX_BUNDLE
@@ -37,14 +38,18 @@ add_executable(model-editor WIN32 MACOSX_BUNDLE
     main.cpp
     impl.cpp
     utils/algorithm.hpp
+    utils/functional.hpp
     utils/imgui.hpp
     utils/macros.hpp
     utils/ranges.hpp
     utils/TempStringBuffer.hpp
+    utils/utf8.cpp
+    utils/utf8.hpp
 )
 target_compile_features(model-editor PRIVATE cxx_std_23)
 target_include_directories(model-editor PRIVATE
     ${BSHOSHANY_THREAD_POOL_INCLUDE_DIRS}
+    ${STRINGZILLA_INCLUDE_DIRS}
     thirdparty/include
 )
 target_precompile_headers(model-editor PRIVATE pch.hpp)

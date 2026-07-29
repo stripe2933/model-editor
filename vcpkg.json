@@ -28,6 +28,7 @@
     },
     "meshoptimizer",
     "nativefiledialog-extended",
+    "stringzilla",
     "tracy",
     {
       "name": "vulkan",
